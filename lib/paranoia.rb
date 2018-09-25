@@ -86,6 +86,7 @@ module Paranoia
           association.decrement_counters
         end
         @_disable_counter_cache = false
+        @_trigger_destroy_callback = true
         result
       end
     end
@@ -313,7 +314,7 @@ module ActiveRecord
     class UniquenessValidator < ActiveModel::EachValidator
       prepend UniquenessParanoiaValidator
     end
-    
+
     class AssociationNotSoftDestroyedValidator < ActiveModel::EachValidator
       def validate_each(record, attribute, value)
         # if association is soft destroyed, add an error
