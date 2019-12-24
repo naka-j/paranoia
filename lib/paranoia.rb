@@ -70,6 +70,7 @@ module Paranoia
           association.decrement_counters
         end
         @_disable_counter_cache = false
+        @_trigger_destroy_callback = true
         result
       end
     end
@@ -162,6 +163,11 @@ module Paranoia
     end
   end
 
+  # for only ActiveRecord (>=6.0)
+  def trigger_transactional_callbacks?
+    super || _trigger_destroy_callback && paranoia_destroyed?
+  end
+
   private
 
   def each_counter_cached_associations
@@ -182,6 +188,41 @@ module Paranoia
 
   def timestamp_attributes_with_current_time
     timestamp_attributes_for_update_in_model.each_with_object({}) { |attr,hash| hash[attr] = current_time_from_proper_timezone }
+  end
+
+  def transaction_include_any_action?(actions)
+    actions.any? do |action|
+      case action
+      when :create
+        if ActiveRecord::VERSION::STRING < "5.2.0"
+          transaction_record_state(:new_record)
+        else
+          persisted? && @_new_record_before_last_commit
+        end
+      when :destroy
+        if ActiveRecord::VERSION::STRING < "5.1.0"
+          transaction_include_destroy?
+        elsif ActiveRecord::VERSION::STRING < "5.2.0"
+          defined?(@_trigger_destroy_callback) && @_trigger_destroy_callback
+        else
+          _trigger_destroy_callback
+        end
+      when :update
+        if ActiveRecord::VERSION::STRING < "5.2.0"
+          update_trigger = !(transaction_record_state(:new_record) || transaction_include_destroy?)
+          if ActiveRecord::VERSION::STRING >= "5.1.0"
+            update_trigger &&= (defined?(@_trigger_update_callback) && @_trigger_update_callback)
+          end
+          update_trigger
+        else
+          !(@_new_record_before_last_commit || transaction_include_destroy?) && _trigger_update_callback
+        end
+      end
+    end
+  end
+
+  def transaction_include_destroy?
+    destroyed? || try(:paranoia_destroyed?)
   end
 
   # restore associated records that have been soft deleted when
