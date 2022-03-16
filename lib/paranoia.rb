@@ -71,7 +71,6 @@ module Paranoia
         end
         @_trigger_destroy_callback = true
         @_disable_counter_cache = false
-        @_trigger_destroy_callback = true
         result
       end
     end
