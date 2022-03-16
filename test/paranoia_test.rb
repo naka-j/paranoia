@@ -83,6 +83,17 @@ class ParanoiaTest < test_framework
     assert_equal true, ParanoidModel.paranoid?
   end
 
+  def test_doubly_paranoid_model_class_is_warned
+    assert_output(/DoublyParanoidModel is calling acts_as_paranoid more than once!/) do
+      DoublyParanoidModel.acts_as_paranoid
+    end
+
+    refute_equal(
+      DoublyParanoidModel.instance_method(:destroy).source_location,
+      DoublyParanoidModel.instance_method(:destroy_without_paranoia).source_location
+    )
+  end
+
   def test_plain_models_are_not_paranoid
     assert_equal false, PlainModel.new.paranoid?
   end
@@ -131,6 +142,21 @@ class ParanoiaTest < test_framework
     assert model.instance_variable_get(:@after_commit_callback_called)
   end
 
+  def test_destroy_behavior_for_freshly_loaded_plain_models_callbacks
+    model = CallbackModel.new
+    model.save
+
+    model = CallbackModel.find(model.id)
+    model.destroy
+
+    assert_nil model.instance_variable_get(:@update_callback_called)
+    assert_nil model.instance_variable_get(:@save_callback_called)
+    assert_nil model.instance_variable_get(:@validate_called)
+
+    assert model.instance_variable_get(:@destroy_callback_called)
+    assert model.instance_variable_get(:@after_destroy_callback_called)
+    assert model.instance_variable_get(:@after_commit_callback_called)
+  end
 
   def test_delete_behavior_for_plain_models_callbacks
     model = CallbackModel.new
@@ -228,6 +254,22 @@ class ParanoiaTest < test_framework
     assert_equal 1, model.class.unscoped.count
     assert_equal 1, model.class.only_deleted.count
     assert_equal 1, model.class.deleted.count
+  end
+
+  def test_destroy_behavior_for_custom_column_models_with_recovery_options
+    model = CustomColumnModel.new
+    model.save!
+
+    assert_nil model.destroyed_at
+
+    model.destroy
+
+    assert_equal false, model.destroyed_at.nil?
+    assert model.paranoia_destroyed?
+
+    model.restore!(recovery_window: 2.minutes)
+
+    assert_equal 1, model.class.count
   end
 
   def test_default_sentinel_value
@@ -1065,6 +1107,11 @@ end
 
 class ParanoidModel < ActiveRecord::Base
   belongs_to :parent_model
+  acts_as_paranoid
+end
+
+class DoublyParanoidModel < ActiveRecord::Base
+  self.table_name = 'plain_models'
   acts_as_paranoid
 end
 

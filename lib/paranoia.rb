@@ -69,6 +69,7 @@ module Paranoia
           next unless send(association.reflection.name)
           association.decrement_counters
         end
+        @_trigger_destroy_callback = true
         @_disable_counter_cache = false
         @_trigger_destroy_callback = true
         result
@@ -80,6 +81,10 @@ module Paranoia
   def paranoia_destroy!
     paranoia_destroy ||
       raise(ActiveRecord::RecordNotDestroyed.new("Failed to destroy the record", self))
+  end
+
+  def trigger_transactional_callbacks?
+    super || @_trigger_destroy_callback && paranoia_destroyed?
   end
 
   def paranoia_delete
@@ -125,16 +130,16 @@ module Paranoia
   def get_recovery_window_range(opts)
     return opts[:recovery_window_range] if opts[:recovery_window_range]
     return unless opts[:recovery_window]
-    (deleted_at - opts[:recovery_window]..deleted_at + opts[:recovery_window])
+    (deletion_time - opts[:recovery_window]..deletion_time + opts[:recovery_window])
   end
 
   def within_recovery_window?(recovery_window_range)
     return true unless recovery_window_range
-    recovery_window_range.cover?(deleted_at)
+    recovery_window_range.cover?(deletion_time)
   end
 
   def paranoia_destroyed?
-    send(paranoia_column) != paranoia_sentinel_value
+    deletion_time != paranoia_sentinel_value
   end
   alias :deleted? :paranoia_destroyed?
 
@@ -266,13 +271,24 @@ module Paranoia
       end
     end
 
-    clear_association_cache if destroyed_associations.present?
+    if ActiveRecord.version.to_s > '7'
+      # Method deleted in https://github.com/rails/rails/commit/dd5886d00a2d5f31ccf504c391aad93deb014eb8
+      @association_cache.clear if persisted? && destroyed_associations.present?
+    else
+      clear_association_cache if destroyed_associations.present?
+    end
   end
 end
 
 ActiveSupport.on_load(:active_record) do
   class ActiveRecord::Base
     def self.acts_as_paranoid(options={})
+      if included_modules.include?(Paranoia)
+        puts "[WARN] #{self.name} is calling acts_as_paranoid more than once!"
+
+        return
+      end
+
       define_model_callbacks :restore, :real_destroy
 
       alias_method :really_destroyed?, :destroyed?
@@ -324,6 +340,10 @@ ActiveSupport.on_load(:active_record) do
     def paranoia_sentinel_value
       self.class.paranoia_sentinel_value
     end
+
+    def deletion_time
+      send(paranoia_column)
+    end
   end
 end
 
@@ -352,7 +372,7 @@ module ActiveRecord
       def validate_each(record, attribute, value)
         # if association is soft destroyed, add an error
         if value.present? && value.paranoia_destroyed?
-          record.errors[attribute] << 'has been soft-deleted'
+          record.errors.add(attribute, 'has been soft-deleted')
         end
       end
     end
